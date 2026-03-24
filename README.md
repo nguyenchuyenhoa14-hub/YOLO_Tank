@@ -6,13 +6,13 @@
 
 ---
 
-## 📸 Demo — Hardware Detection Result
+## 📸 Demo — Verilator Simulation Detection Result
 
 <p align="center">
-  <img src="demo/detection_result.jpg" width="500"/>
+  <img src="demo/detection_results.jpg" width="600"/>
 </p>
 
-<p align="center"><i>Real-time military vehicle detection on Zynq-7020 FPGA (KIIT-MiTA dataset, 320×320 input)</i></p>
+<p align="center"><i>Detection results from RTL simulation via Verilator (KIIT-MiTA dataset, 320×320 input)</i></p>
 
 ---
 
