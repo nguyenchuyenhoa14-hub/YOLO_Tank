@@ -1,16 +1,30 @@
-# YOLO-Tank: FPGA Accelerator for YOLOv8 Detection Head
+# 🚀 YOLO-Tank
 
-A resource-efficient FPGA accelerator implementing the complete YOLOv8 detection head — convolution, DFL decoding, and division-free IoU NMS — entirely in hardware on a Zynq-7020.
+**A Resource-Efficient FPGA Accelerator for YOLOv8 Detection Head with On-Chip DFL Decoding and Division-Free NMS**
 
-## Architecture Overview
+> Submitted to *International Conference on Intelligent Autonomous Agents and Applications (IAAA 2026)*
+
+---
+
+## 📸 Demo — Hardware Detection Result
+
+<p align="center">
+  <img src="demo/detection_result.jpg" width="500"/>
+</p>
+
+<p align="center"><i>Real-time military vehicle detection on Zynq-7020 FPGA (KIIT-MiTA dataset, 320×320 input)</i></p>
+
+---
+
+## 🏗️ Architecture Overview
 
 ```
 ARM Cortex-A9 (PS)                    Programmable Logic (PL)
 ┌──────────────┐    AXI4 burst    ┌─────────────────────────────────────┐
 │  DDR Memory  │ ───────────────► │  Master FSM (6-Stage Sequential)    │
-│  Backbone    │                  │      ┌──────────┐  ┌──────────┐    │
-│  + Neck      │                  │      │  RAM A   │  │  RAM B   │    │
-│              │                  │      └────┬─────┘  └─────┬────┘    │
+│  (Backbone   │                  │      ┌──────────┐  ┌──────────┐    │
+│   + Neck     │                  │      │  RAM A   │  │  RAM B   │    │
+│   output)    │                  │      └────┬─────┘  └─────┬────┘    │
 │              │                  │           │  ping-pong    │         │
 │              │                  │      ┌────┴──────────────┴────┐    │
 │              │                  │      │   CNN Engine (16× MACs) │    │
@@ -22,110 +36,140 @@ ARM Cortex-A9 (PS)                    Programmable Logic (PL)
 │              │                  │      │  (256-entry LUT Softmax)│    │
 │              │                  │      └────────────┬───────────┘    │
 │              │                  │                   │                 │
-│              │                  │      ┌────────────▼───────────┐    │
-│              │  ◄─── Results ── │      │   Division-Free NMS    │    │
+│              │  ◄─── Results ── │      ┌────────────▼───────────┐    │
+│              │                  │      │   Division-Free NMS    │    │
 │              │                  │      │  (5+4 stage pipeline)  │    │
 └──────────────┘                  │      └────────────────────────┘    │
                                   └─────────────────────────────────────┘
 ```
 
-## Key Features
+---
 
-- **Resource-multiplexed pipeline**: Single configurable convolution engine reused across all 6 head layers via time-division multiplexing with ping-pong BRAM buffering
-- **Hardware DFL decoder**: 256-entry BRAM LUT replaces floating-point Softmax exponentials; sequential integer divider produces Q0.16 probabilities
-- **Division-free IoU NMS**: Cross-multiplication eliminates hardware dividers entirely; 5-stage load + 4-stage IoU pipeline achieves 100 MHz timing closure
-- **Three-phase quantization**: Knowledge Distillation → PCQ-Aware Fine-Tuning → INT8 export
+## ✨ Key Innovations
 
-## Results (Zynq-7020, xc7z020clg400-1)
+| Innovation | Description |
+|:-----------|:------------|
+| **Resource-multiplexed Conv** | Single configurable convolution engine reused across all 6 head layers via time-division multiplexing with ping-pong BRAM buffering |
+| **Hardware DFL Decoder** | 256-entry BRAM LUT replaces floating-point Softmax; sequential integer divider produces Q0.16 probabilities |
+| **Division-Free IoU NMS** | Cross-multiplication `inter × D > union × N` eliminates hardware dividers; 5-stage load + 4-stage IoU pipeline at 100 MHz |
+| **Three-Phase Quantization** | ReLU Knowledge Distillation → PCQ-Aware Fine-Tuning → INT8 Static Export |
+
+---
+
+## 📊 Implementation Results — Zynq-7020 (xc7z020clg400-1)
 
 | Metric | Value |
-|--------|-------|
-| Detection head throughput | **31.0 FPS** @ 100 MHz |
-| LUT | 15,401 (28.95%) |
-| FF | 22,660 (21.30%) |
-| BRAM | 126 / 140 (90.00%) |
-| DSP48 | 154 / 220 (70.00%) |
-| PL dynamic power | 0.279 W |
+|:-------|:------|
+| Detection Head Throughput | **31.0 FPS** @ 100 MHz |
+| LUT Usage | 15,401 / 53,200 (28.95%) |
+| FF Usage | 22,660 / 106,400 (21.30%) |
+| BRAM Usage | 126 / 140 (90.00%) |
+| DSP48 Usage | 154 / 220 (70.00%) |
+| PL Dynamic Power | 0.279 W |
 | mAP₅₀ (INT8, KIIT-MiTA) | 67.0% |
-| WNS (post place-and-route) | +0.122 ns |
+| WNS (post P&R) | +0.122 ns |
 
-## Repository Structure
+---
+
+## 📁 Repository Structure
 
 ```
-├── rtl/yolo_complete/
-│   ├── cnn/
-│   │   ├── head/              # Detection head RTL (main source)
-│   │   │   ├── detect_head_seq.v      # Sequential detection head FSM
-│   │   │   ├── conv_stage.v           # Configurable convolution stage
-│   │   │   ├── cnn_engine_dynamic.v   # Dynamic CNN engine with 16 PEs
-│   │   │   ├── line_buffer.v          # BRAM-based 3×3 sliding window
-│   │   │   ├── dfl_accelerator.v      # 5-stage DFL pipeline
-│   │   │   ├── seq_divider.v          # Sequential restoring divider
-│   │   │   ├── iou_nms_unit.v         # Division-free IoU NMS
-│   │   │   ├── backbone_seq.v         # Backbone sequential controller
-│   │   │   ├── yolov8_top_core.v      # Top-level core
-│   │   │   ├── yolov8_axi_wrapper.v   # AXI4 interface wrapper
-│   │   │   ├── create_block_design.tcl # Vivado block design script
-│   │   │   └── *.xdc                  # Timing constraints
-│   │   ├── vivado_src/        # Full system Verilog (backbone + head)
-│   │   └── save/              # Archived RTL versions
-│   ├── tb/                    # Verilator/Verilog testbenches
-│   ├── vitis/                 # Zynq PS bare-metal C code
-│   ├── weights_for_verilog_pe/    # INT8 weight .mem files (head)
-│   ├── weights_for_verilog_pcq/   # PCQ quantization parameters
-│   ├── weights_backbone_pe/       # Backbone weight .mem files
-│   ├── exp_lut_p3.mem         # DFL exponential LUT (P3 scale)
-│   ├── input_image_320.mem    # Test image (320×320)
-│   └── tank_centers.mem       # NMS detection output
-├── utils/                     # Python verification & visualization
-│   ├── golden_all_layers.py           # Golden model for all layers
-│   ├── visualize_hardware_nms.py      # NMS result visualization
-│   ├── check_rtl_vs_python_accuracy.py # RTL vs golden comparison
-│   └── ...
-├── reports/                   # Vivado post-implementation reports
-│   ├── utilization.txt
-│   ├── utilization_hierarchy.txt
-│   ├── timing_summary.txt
-│   └── power.txt
-├── pic_test/                  # Test images
-├── kiitmita_tank/             # Training results & configs
-├── regenerate_all.py          # Regenerate all .mem files from model
-├── run_full_verilator.sh      # Run head-only Verilator simulation
-├── run_all_verilator.sh       # Run all layer verification
-└── export_image_to_rtl.py     # Convert test image to .mem format
+YOLO_Tank/
+│
+├── README.md
+│
+├── source/                          # RTL source — Detection Head
+│   ├── detect_head_seq.v            #   Sequential 6-layer FSM controller
+│   ├── conv_stage.v                 #   Configurable convolution stage
+│   ├── cnn_engine_dynamic.v         #   16-PE MAC array engine
+│   ├── line_buffer.v                #   BRAM-based 3×3 sliding window
+│   ├── dfl_accelerator.v            #   5-stage DFL pipeline + LUT Softmax
+│   ├── seq_divider.v                #   Sequential restoring divider
+│   ├── iou_nms_unit.v               #   Division-free IoU NMS unit
+│   ├── yolov8_top_core.v            #   Top-level detection head core
+│   ├── yolov8_axi_wrapper_full.v    #   AXI4 bus wrapper
+│   ├── ooc_timing.xdc               #   Out-of-context timing constraints
+│   ├── ooc_timing_axi.xdc           #   AXI timing constraints
+│   └── yolov8_system.xdc            #   Full system constraints
+│
+├── testbench/                       # Verilator & Verilog testbenches
+│   ├── tb_p3_seq.v                  #   P3 scale detection head test
+│   ├── tb_p3_system.v               #   P3 system-level test
+│   ├── tb_iou_nms.v                 #   IoU NMS unit test
+│   ├── tb_centroid_nms.v            #   Centroid NMS test
+│   ├── tb_full_pipeline.v           #   Full pipeline integration test
+│   ├── tb_axi_wrapper.cpp           #   Verilator AXI wrapper test
+│   ├── tb_yolov8_top_core.cpp       #   Verilator top core test
+│   └── tb_cycle_measure.cpp         #   Cycle-accurate timing measurement
+│
+├── weights_and_mem/                 # INT8 quantized weights & LUT data
+│   ├── weights_for_verilog_pe/      #   Per-layer weight .mem files
+│   │   ├── model_22_cv2_*           #     BBox branch (3 layers × 6 params)
+│   │   └── model_22_cv3_*           #     Class branch (3 layers × 6 params)
+│   ├── exp_lut_p3.mem               #   DFL exponential lookup table
+│   ├── tank_centers.mem             #   NMS detection output
+│   └── tank_centers_iou.mem         #   NMS IoU debug output
+│
+├── python_utils/                    # Python verification & visualization
+│   ├── golden_all_layers.py         #   Golden model for all 6 head layers
+│   ├── check_rtl_vs_python_accuracy.py  # RTL vs golden comparison
+│   ├── visualize_hardware_nms.py    #   NMS result visualization
+│   ├── regenerate_all.py            #   Regenerate all .mem from model
+│   └── regenerate_all_kiit.py       #   Regenerate for KIIT-MiTA dataset
+│
+├── scripts/                         # Simulation shell scripts
+│   ├── run_all_verilator.sh         #   Run all Verilator simulations
+│   └── run_cycle_measure.sh         #   Measure pipeline cycle count
+│
+└── demo/                            # Demo images & detection results
+    ├── image_s3r2_kiit_402.jpeg     #   Input test image (320×320)
+    └── detection_result.jpg         #   Hardware detection output
 ```
 
-## Quick Start
+---
+
+## 🔧 Quick Start
 
 ### Prerequisites
-- Verilator (≥ 4.0)
-- Python 3.8+ with `numpy`, `torch`, `ultralytics`
-- Vivado 2024.2 (for synthesis)
+
+- **Verilator** ≥ 4.0 (RTL simulation)
+- **Python 3.8+** with `numpy`, `torch`, `ultralytics`
+- **Vivado 2024.2** (synthesis & implementation)
 
 ### Run Verilator Simulation
+
 ```bash
-# Regenerate weight .mem files from trained model
+# 1. Regenerate weight .mem files from trained model
+cd python_utils
 python3 regenerate_all.py
 
-# Run detection head simulation
-bash run_full_verilator.sh
+# 2. Run detection head simulation
+cd ../scripts
+bash run_all_verilator.sh
 
-# Visualize NMS results
-python3 utils/visualize_hardware_nms.py
+# 3. Visualize NMS results
+cd ../python_utils
+python3 visualize_hardware_nms.py
 ```
 
 ### Vivado Synthesis
+
 ```bash
-# Source files are in rtl/yolo_complete/cnn/head/
-# Use create_block_design.tcl for block design generation
-# Constraints: yolov8_system.xdc (full system) or ooc_timing.xdc (OOC)
+# Source files are in source/
+# Constraints: yolov8_system.xdc (full) or ooc_timing.xdc (OOC)
+# Top module: yolov8_top_core
 ```
 
-## Dataset
+---
 
-Trained on [KIIT-MiTA Military Vehicle Dataset](https://doi.org/10.1109/ISACC65211.2025.10969335) (2,139 images, single class, 320×320).
+## 📚 Dataset
 
-## Citation
+Trained and evaluated on the [KIIT-MiTA Military Vehicle Dataset](https://doi.org/10.1109/ISACC65211.2025.10969335)
+— 2,139 images, single class (military vehicle), 320×320 resolution.
+
+---
+
+## 📝 Citation
 
 ```bibtex
 @inproceedings{nguyen2026yolotank,
@@ -137,6 +181,14 @@ Trained on [KIIT-MiTA Military Vehicle Dataset](https://doi.org/10.1109/ISACC652
 }
 ```
 
-## License
+---
 
-This project is released for academic research purposes.
+## 📄 License
+
+This project is released for **academic research purposes only**.
+
+---
+
+<p align="center">
+  <b>YOLO-Tank</b> — Bringing real-time object detection to the edge with FPGA 🛡️
+</p>
