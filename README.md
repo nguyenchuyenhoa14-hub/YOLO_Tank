@@ -122,6 +122,15 @@ YOLO_Tank/
 - **Python 3.8+** with `numpy`, `torch`, `ultralytics`
 - **Vivado 2024.2** (synthesis & implementation)
 
+### Train the Model (Optional)
+
+The full 5-phase training pipeline (SiLU 640 → ReLU KD 320 → PCQ-FT → INT8 `.mem` Extraction) is entirely automated via a Windows batch script:
+
+```bat
+cd "training model"
+run_tank_pipeline.bat
+```
+
 ### Run Verilator Simulation
 
 ```bash
