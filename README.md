@@ -103,6 +103,10 @@ YOLO_Tank/
 │   ├── exp_lut_p3.mem               #   DFL exponential lookup table
 │   └── tank_centers.mem             #   NMS detection output
 │
+├── training model/                  # 5-Phase Model Training Pipeline
+│   ├── run_tank_pipeline.bat        #   Automated training batch script
+│   └── tank_pcq_finetune.py         #   Per-Channel Quantization core
+│
 ├── python_utils/                    # Python verification & visualization
 │   └── check_rtl_vs_python_accuracy.py  # RTL vs golden comparison
 │
