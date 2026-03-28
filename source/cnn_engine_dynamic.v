@@ -51,10 +51,10 @@ module cnn_engine_dynamic #(
     // Weight Interface
     input wire [7:0] weight_in,
     input wire       weight_wr,
-    input wire [8:0] weight_addr,
+    input wire [9:0]  weight_addr,
     input wire [31:0] bias_in,
     input wire        bias_wr,
-    input wire [4:0]  bias_addr,
+    input wire [5:0]  bias_addr,
 
     // * PARALLEL RESULT BUS *
     // All PARALLEL_OUT results are valid simultaneously for 1 clock cycle
@@ -127,32 +127,51 @@ module cnn_engine_dynamic #(
 
 
     //--------------------------------------------------------------------------
-    // 2. Weight Storage
+    // 2. Weight Storage + Fan-out Reduction Pipeline
+    //    Pipeline registers + MAX_FANOUT force Vivado to auto-replicate
+    //    the data register, reducing routing delay from 8.7ns to ~3ns.
+    //    The simulator sees a plain scalar (bit-exact simulation).
     //--------------------------------------------------------------------------
     reg signed [7:0] weights [0:PARALLEL_OUT-1][0:2][0:8];
     reg signed [31:0] biases [0:255] /* verilator public */;
 
+    // ── Pipeline registers with fanout control ──
+    // MAX_FANOUT forces Vivado to replicate w_pipe_data into multiple copies
+    // (DONT_TOUCH must NOT be used here, as it forbids replication)
+    (* MAX_FANOUT = 10 *) reg signed [7:0] w_pipe_data;
+    reg               w_pipe_wr;
+    reg [9:0]         w_pipe_addr;
+    reg [2:0]         w_pipe_ksize;
+    (* MAX_FANOUT = 16 *) reg signed [31:0] b_pipe_data;
+    reg               b_pipe_wr;
+    reg [5:0]         b_pipe_addr;
+    reg [9:0]         b_pipe_oblk;
+
     integer w_i, w_j;
 
     always @(posedge clk) begin
-        if (weight_wr) begin
-            if (kernel_size == 1) begin
-                if (weight_addr < PARALLEL_OUT) begin
-                    weights[weight_addr[5:0]][0][4] <= $signed(weight_in);
-                end
-            end else begin
-                // 3x3: weight_addr is 0..W_MAX-1 (= PARALLEL_OUT*9 - 1)
-                // Layout: addr = pe_idx*9 + kernel_pos
-                if (weight_addr < PARALLEL_OUT * 9) begin
-                    weights[(weight_addr / 9)][0][(weight_addr % 9)] <= $signed(weight_in);
+        // ── Stage 1: Capture inputs (1 cycle delay) ──
+        w_pipe_data  <= $signed(weight_in);
+        w_pipe_wr    <= weight_wr;
+        w_pipe_addr  <= weight_addr;
+        w_pipe_ksize <= kernel_size;
+        b_pipe_data  <= $signed(bias_in);
+        b_pipe_wr    <= bias_wr;
+        b_pipe_addr  <= bias_addr;
+        b_pipe_oblk  <= out_blk_cnt_dbg;
 
-                end
+        // ── Stage 2: Write to arrays from pipelined registers ──
+        if (w_pipe_wr) begin
+            if (w_pipe_ksize == 1) begin
+                if (w_pipe_addr < PARALLEL_OUT)
+                    weights[w_pipe_addr[5:0]][0][4] <= w_pipe_data;
+            end else begin
+                if (w_pipe_addr < PARALLEL_OUT * 9)
+                    weights[(w_pipe_addr / 9)][0][(w_pipe_addr % 9)] <= w_pipe_data;
             end
         end
-        if (bias_wr) begin
-            biases[out_blk_cnt_dbg * PARALLEL_OUT + bias_addr] <= $signed(bias_in);
-
-        end
+        if (b_pipe_wr)
+            biases[b_pipe_oblk * PARALLEL_OUT + b_pipe_addr] <= b_pipe_data;
     end
 
     initial begin
@@ -189,7 +208,7 @@ module cnn_engine_dynamic #(
     assign pixel_ready_fix = (state == ST_STREAM) ? 1'b1 : 1'b0;
 
     // --- Pipeline Stage C1: multiply products ---
-    (* use_dsp = "yes" *) reg signed [15:0] c1_prod [0:PARALLEL_OUT-1][0:8];
+    reg signed [15:0] c1_prod [0:PARALLEL_OUT-1][0:8];
     reg signed [31:0] c1_bias [0:PARALLEL_OUT-1];
     reg               c1_valid;
     reg               c1_done;
@@ -358,6 +377,8 @@ module cnn_engine_dynamic #(
                     // Pipeline drain cycle 3: C2b → output
                     state <= ST_WAIT;
                 end
+
+                default: state <= ST_WAIT;
             endcase
         end
     end

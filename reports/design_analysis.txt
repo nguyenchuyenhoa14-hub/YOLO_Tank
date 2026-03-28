@@ -1,0 +1,54 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2024.2 (win64) Build 5239630 Fri Nov 08 22:35:27 MST 2024
+| Date         : Thu Mar 26 22:58:27 2026
+| Host         : DESKTOP-9B72JVV running 64-bit major release  (build 9200)
+| Command      : report_design_analysis -timing -file C:/github/reports/design_analysis.txt
+| Design       : yolov8_top_core
+| Device       : xc7z020
+| Design State : Routed
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Report Design Analysis
+
+Table of Contents
+-----------------
+1. Setup Path Characteristics 1-1
+
+1. Setup Path Characteristics 1-1
+---------------------------------
+
++---------------------------+--------------------------------------------------------------------------------------------------------------------+
+|      Characteristics      |                                                       Path #1                                                      |
++---------------------------+--------------------------------------------------------------------------------------------------------------------+
+| Requirement               | 9.500                                                                                                              |
+| Path Delay                | 9.096                                                                                                              |
+| Logic Delay               | 4.301(48%)                                                                                                         |
+| Net Delay                 | 4.795(52%)                                                                                                         |
+| Clock Skew                | -0.049                                                                                                             |
+| Slack                     | 0.074                                                                                                              |
+| Clock Uncertainty         | 0.035                                                                                                              |
+| Clock Relationship        | Partial False Path                                                                                                 |
+| Clock Delay Group         | -                                                                                                                  |
+| Logic Levels              | 11                                                                                                                 |
+| Routes                    | 11                                                                                                                 |
+| Logical Path              | FDRE/C-(7)-LUT4-(1)-CARRY4-(1)-CARRY4-LUT3-(1)-LUT6-(1)-CARRY4-(1)-CARRY4-LUT1-(1)-CARRY4-(1)-CARRY4-CARRY4-FDRE/D |
+| Start Point Clock         | clk                                                                                                                |
+| End Point Clock           | clk                                                                                                                |
+| DSP Block                 | None                                                                                                               |
+| RAM Registers             | None-None                                                                                                          |
+| IO Crossings              | 0                                                                                                                  |
+| Config Crossings          | 0                                                                                                                  |
+| SLR Crossings             | 0                                                                                                                  |
+| PBlocks                   | 0                                                                                                                  |
+| High Fanout               | 7                                                                                                                  |
+| Dont Touch                | 0                                                                                                                  |
+| Mark Debug                | 0                                                                                                                  |
+| Start Point Pin Primitive | FDRE/C                                                                                                             |
+| End Point Pin Primitive   | FDRE/D                                                                                                             |
+| Start Point Pin           | r_x1_i_reg[2]/C                                                                                                    |
+| End Point Pin             | s4_do_merge_i_47_psdsp/D                                                                                           |
++---------------------------+--------------------------------------------------------------------------------------------------------------------+
+* Bounding box calculated as % of dimensions for the target device (308, 299)
+
+

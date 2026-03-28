@@ -103,6 +103,8 @@ localparam S_QUANT_RD   = 4'd6;
 localparam S_QUANT_PIPE = 4'd7;
 localparam S_QUANT_DRAIN= 4'd8;
 localparam S_DONE       = 4'd9;
+localparam S_LOAD_W_SETTLE = 4'd10; // Fan-out tree: weight pipeline settle
+localparam S_LOAD_B_SETTLE = 4'd11; // Fan-out tree: bias pipeline settle
 
 reg [3:0] state;
 
@@ -122,24 +124,12 @@ reg [4:0]         s_local [0:PARALLEL-1];
 reg signed [7:0]  z_local [0:PARALLEL-1];
 
 // Stage Q0: Register bit-selected psum and M scale factor
-wire signed [31:0] psum_val_w = $signed(psum_wide_rdata_r[(q_oc*32)+31 -: 32]);
+// Moved to bottom logically to prevent used-before-declared warnings
 reg signed [31:0] psum_val_r;
 reg signed [31:0] m_data_r;
 reg [4:0]  s_q0_r;
 reg signed [7:0] z_q0_r;
 reg        q0_valid;
-
-wire q0_feed = (state == S_QUANT_PIPE) && (q_oc < active_ocs) && (fifo_cnt < FIFO_DEPTH - 6);
-
-always @(posedge clk) begin
-    if (q0_feed) begin
-        psum_val_r <= psum_val_w;
-        m_data_r   <= m_local[q_oc];
-        s_q0_r     <= s_local[q_oc];
-        z_q0_r     <= z_local[q_oc];
-    end
-    q0_valid <= q0_feed;
-end
 
 // Stage Q1: Multiply from registered inputs
 (* use_dsp = "yes" *) reg signed [63:0] mul_res_r;
@@ -160,7 +150,7 @@ end
 // BUGFIX: Verilog rule - if shift amount is unsigned, the whole expression becomes unsigned!
 // We must explicitly sign extend the intermediate shift to maintain arithmetic shift.
 wire signed [63:0] mul_shifted_31 = mul_res_r >>> 31;
-wire signed [31:0] qs_w = (mul_shifted_31 >>> s_data_r) + $signed(z_data_r);
+wire signed [31:0] qs_w = $signed(mul_shifted_31 >>> s_data_r) + $signed(z_data_r);
 
 reg signed [31:0] qs_r;        // Registered shift+add result
 reg signed [7:0]  z_data_r2;   // Pipeline Z for ReLU compare in Q3
@@ -182,6 +172,10 @@ wire fifo_push = q2_valid && !fifo_full;
 always @(posedge clk) begin
     if (fifo_push) begin
         fifo_mem[fifo_wr_ptr] <= qc_w;
+        // DEBUG
+        if (q_oc_r == 0 && out_blk == 0 && fifo_cnt < 10) 
+          $display("RTL FIFO PUSH cv3_0: psum_val_r=%d, m_data=%d, shift_31=%d, qs_r=%d, qc_w_raw=%d, qc_w=%d", 
+                   psum_val_r, m_data_r, mul_shifted_31, qs_r, qc_w_raw, qc_w);
     end
 end
 
@@ -206,12 +200,12 @@ reg        eng_start;
 wire       eng_done;
 reg  [7:0] eng_w_data;
 reg        eng_w_wr;
-reg  [8:0] eng_w_addr;
+reg  [9:0] eng_w_addr;
 reg [31:0] eng_b_data;
 reg        eng_b_wr;
-reg  [4:0] eng_b_addr;
-reg  [9:0] eng_out_blk_dbg;
-reg  [9:0] eng_in_ch_dbg;
+reg  [5:0] eng_b_addr;
+(* max_fanout = 16 *) reg  [9:0] eng_out_blk_dbg;
+(* max_fanout = 16 *) reg  [9:0] eng_in_ch_dbg;
 
 wire signed [32*PARALLEL-1:0] eng_result_bus;
 wire                          eng_result_valid;
@@ -289,6 +283,20 @@ always @(posedge clk) begin
     psum_wide_rdata_r <= psum_wide[psum_wide_raddr_w];
 end
 
+// Stage Q0 (Moved here from top): Register bit-selected psum and M scale factor
+wire signed [31:0] psum_val_w = $signed(psum_wide_rdata_r[(q_oc*32)+31 -: 32]);
+wire q0_feed = (state == S_QUANT_PIPE) && (q_oc < active_ocs) && (fifo_cnt < FIFO_DEPTH - 6);
+
+always @(posedge clk) begin
+    if (q0_feed) begin
+        psum_val_r <= psum_val_w;
+        m_data_r   <= m_local[q_oc];
+        s_q0_r     <= s_local[q_oc];
+        z_q0_r     <= z_local[q_oc];
+    end
+    q0_valid <= q0_feed;
+end
+
 // result_latch removed (was unused dead code)
 
 // FSM States moved up
@@ -345,7 +353,7 @@ always @(posedge clk or negedge rst_n) begin
         S_LOAD_B: begin
             if (b_cnt < PARALLEL && (out_blk*PARALLEL + b_cnt) < r_out_ch) begin
                 eng_b_wr   <= 1;
-                eng_b_addr <= b_cnt[4:0];
+                eng_b_addr <= b_cnt[5:0];
                 eng_b_data <= b_rd_data;
                 m_local[b_cnt] <= m_rd_data;
                 s_local[b_cnt] <= s_rd_data[4:0];
@@ -363,8 +371,13 @@ always @(posedge clk or negedge rst_n) begin
                     w_base_addr <= out_blk * r_in_ch * (PARALLEL * 9) + in_ch * (PARALLEL * 9);
                 else
                     w_base_addr <= out_blk * r_in_ch * PARALLEL + in_ch * PARALLEL;
-                state <= S_LOAD_W;
+                state <= S_LOAD_B_SETTLE;
             end
+        end
+
+        // ---- Fan-out tree: bias pipeline settle ----
+        S_LOAD_B_SETTLE: begin
+            state <= S_LOAD_W;
         end
 
         // ---- Load weights ----
@@ -372,13 +385,18 @@ always @(posedge clk or negedge rst_n) begin
         S_LOAD_W: begin
             if (w_cnt < r_w_max) begin
                 eng_w_wr   <= 1;
-                eng_w_addr <= w_cnt[8:0];
+                eng_w_addr <= w_cnt[9:0];
                 eng_w_data <= w_rd_data;
                 w_cnt <= w_cnt + 1;
             end else begin
                 w_cnt <= 0;
-                state <= S_ENG_START;
+                state <= S_LOAD_W_SETTLE;
             end
+        end
+
+        // ---- Fan-out tree: weight pipeline settle ----
+        S_LOAD_W_SETTLE: begin
+            state <= S_ENG_START;
         end
 
         S_ENG_START: begin

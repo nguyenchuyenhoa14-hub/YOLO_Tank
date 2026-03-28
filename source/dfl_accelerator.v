@@ -322,11 +322,11 @@ always @(posedge clk or negedge rst_n) begin
         end
         
         if (s4_computing) begin
-            mac_accumulator <= mac_accumulator + (probs[mac_counter] * mac_counter);
+            mac_accumulator <= mac_accumulator + mac_mult;
             
             if (mac_counter == DFL_BINS - 1) begin
                 s4_computing <= 1'b0;
-                coord_out <= (mac_accumulator + (probs[mac_counter] * mac_counter)) << 4;
+                coord_out <= (mac_accumulator + mac_mult) << 4;
                 done <= 1'b1;
                 busy <= 1'b0;
             end else begin
@@ -335,5 +335,7 @@ always @(posedge clk or negedge rst_n) begin
         end
     end
 end
+
+(* use_dsp = "no" *) wire [31:0] mac_mult = probs[mac_counter] * mac_counter;
 
 endmodule

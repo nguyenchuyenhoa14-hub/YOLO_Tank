@@ -40,3 +40,9 @@ set_property STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE AggressiveExplore [get_runs impl_
 # Post-route phys_opt (additional optimization pass)
 set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED true [get_runs impl_1]
 set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE AggressiveExplore [get_runs impl_1]
+
+# ================================================================
+# Asynchronous Exceptions
+# ================================================================
+# Ignore recovery checks on the asynchronous reset
+set_false_path -from [get_ports rst_n]

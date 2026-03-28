@@ -82,7 +82,7 @@ always @(posedge clk) begin
     ext_rd_cls_data  <= cls_ram[ext_rd_addr];
 end
 
-assign ext_rd_bbox_data = ram_b_dout;
+assign ext_rd_bbox_data = bram_rdata_b;
 
 // ========================================================================
 // Main FSM States & Config
@@ -110,16 +110,50 @@ wire [31:0] rd_addr = (fsm_state == S_IDLE) ? ext_rd_addr : internal_rd_addr;
 /* verilator lint_on UNUSEDSIGNAL */
 wire rd_pix_oob = (rd_pix >= PIX);
 
-reg signed [7:0] ram_a_dout, ram_b_dout, ram_c_dout;
+reg signed [7:0] bram_rdata_a, bram_rdata_b, bram_rdata_c; // Renamed from ram_a_dout, etc.
 reg rd_pix_oob_d1;
 reg [1:0] rd_src_cur_d1;
+
+// --- 250MHz READ FAN-OUT PIPELINE EXTENSION (+3 cycles to match BRAM) ---
+(* max_fanout = 16 *) reg [31:0] rd_addr_p1, rd_addr_p2;
+reg valid_p1, valid_p2, valid_p3;
+
+// Combinational wire ensuring pixel valid latching aligns EXACTLY with rd_pix fetches
+wire valid_cmd = (fsm_state == S_START_STAGE) || 
+                 (fsm_state == S_FEED && skid_count < 4 && rd_pass < rd_total_passes);
+
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        valid_p1 <= 0;
+        valid_p2 <= 0;
+        valid_p3 <= 0;
+        rd_addr_p1 <= 0;
+        rd_addr_p2 <= 0;
+    end else begin
+        rd_addr_p1 <= rd_addr;
+        rd_addr_p2 <= rd_addr_p1;
+
+        if (fsm_state == S_IDLE || fsm_state == S_COLLECT || fsm_state == S_NEXT || fsm_state == S_DONE) begin
+            // ONLY flush the pipeline if we are NOT in active fetch cycles
+            valid_p1 <= 0;
+            valid_p2 <= 0;
+            valid_p3 <= 0;
+        end else begin
+            // In S_START_STAGE and S_FEED, properly pipeline the fetch flag!
+            // Pixel 0 is evaluated in S_START_STAGE, so valid_cmd MUST flow into valid_p1!
+            valid_p1 <= valid_cmd; 
+            valid_p2 <= valid_p1;
+            valid_p3 <= valid_p2; 
+        end
+    end
+end
 
 always @(posedge clk) begin
     rd_pix_oob_d1 <= rd_pix_oob;
     rd_src_cur_d1 <= stage_src[active_stage];
-    ram_a_dout <= ram_a[rd_addr];
-    ram_b_dout <= ram_b[rd_addr];
-    ram_c_dout <= ram_c[rd_addr];
+    bram_rdata_a <= ram_a[rd_addr_p2];
+    bram_rdata_b <= ram_b[rd_addr_p2];
+    bram_rdata_c <= ram_c[rd_addr_p2];
 end
 
 // ========================================================================
@@ -179,7 +213,7 @@ reg signed [31:0] m_rom_4 [0:MID_CH-1];
 reg [4:0]         s_rom_4 [0:MID_CH-1];
 reg signed [7:0]  z_rom_4 [0:MID_CH-1];
 
-localparam W_DEPTH_5 = 2048; // Padded to 32 output channels in PyTorch export script!
+localparam W_DEPTH_5 = OUT_BLKS_CLS * PARALLEL * MID_CH;
 reg signed [7:0]  w_rom_5 [0:W_DEPTH_5-1];
 reg signed [31:0] b_rom_5 [0:NUM_CLASS-1];
 reg signed [31:0] m_rom_5 [0:NUM_CLASS-1];
@@ -269,45 +303,56 @@ reg        conv_cfg_unsigned_in;
 reg  [7:0] conv_cfg_padding_val;
 
 wire [7:0] conv_pix_in_bram = rd_pix_oob_d1 ? ((rd_src_cur_d1 == 2'd0) ? 8'h80 : 8'h00) :
-                         (rd_src_cur_d1 == 2'd0) ? ram_a_dout :
-                         (rd_src_cur_d1 == 2'd1) ? ram_b_dout :
-                                                   ram_c_dout;
+                         (rd_src_cur_d1 == 2'd0) ? bram_rdata_a :
+                         (rd_src_cur_d1 == 2'd1) ? bram_rdata_b :
+                                                   bram_rdata_c;
 
 reg        conv_pix_valid;
 wire       conv_pix_ready;
 
-// Skid buffer to catch in-flight data when receiver stalls (BRAM 1-cycle latency compensator)
-reg conv_pix_valid_d1;
-reg conv_skid_valid;
-reg [7:0] conv_skid_data;
-// conv_skid_drained_flag: 1-cycle delayed version of the drain event.
-// Uses simple nonblocking capture of (conv_skid_valid && conv_pix_ready) so the
-// flag is HIGH on the cycle AFTER the drain — exactly when stale BRAM data appears.
-reg conv_skid_drained_flag;
+// --- 8-Deep FWFT Synchronous FIFO to absorb 3-cycle Pipelined BRAM Latency ---
+reg [7:0] skid_fifo_data [0:7];
+reg [2:0] skid_wr_ptr;
+reg [2:0] skid_rd_ptr;
+reg [3:0] skid_count;
+
+wire skid_full  = (skid_count >= 8);
+wire skid_empty = (skid_count == 0);
 
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        conv_pix_valid_d1 <= 0;
-        conv_skid_valid <= 0;
-        conv_skid_data <= 0;
-        conv_skid_drained_flag <= 0;
+        skid_wr_ptr <= 0;
+        skid_rd_ptr <= 0;
+        skid_count  <= 0;
     end else begin
-        conv_pix_valid_d1 <= conv_pix_valid; // Track upstream FSM validity
-        // Capture the drain event: flag will be HIGH on the NEXT cycle (nonblocking)
-        conv_skid_drained_flag <= (conv_skid_valid && conv_pix_ready);
-        if (conv_pix_valid_d1 && !conv_pix_ready && !conv_skid_valid) begin
-            // Receiver stalled, but data is already arriving from BRAM. Catch it!
-            conv_skid_valid <= 1;
-            conv_skid_data <= conv_pix_in_bram;
-        end else if (conv_skid_valid && conv_pix_ready) begin
-            // Skid is draining: receiver accepted the skid data.
-            conv_skid_valid <= 0;
+        if (fsm_state == S_START_STAGE) begin
+            skid_wr_ptr <= 0;
+            skid_rd_ptr <= 0;
+            skid_count  <= 0;
+        end else begin
+            case ({valid_p3, (conv_pix_ready && !skid_empty)})
+                2'b10: begin // Write only
+                    skid_fifo_data[skid_wr_ptr] <= conv_pix_in_bram;
+                    skid_wr_ptr <= skid_wr_ptr + 1;
+                    skid_count  <= skid_count + 1;
+                end
+                2'b01: begin // Read only
+                    skid_rd_ptr <= skid_rd_ptr + 1;
+                    skid_count  <= skid_count - 1;
+                end
+                2'b11: begin // Simultaneous Write and Read
+                    skid_fifo_data[skid_wr_ptr] <= conv_pix_in_bram;
+                    skid_wr_ptr <= skid_wr_ptr + 1;
+                    skid_rd_ptr <= skid_rd_ptr + 1;
+                end
+                default: ; // Do nothing
+            endcase
         end
     end
 end
 
-wire [7:0] conv_pix_in = conv_skid_valid ? conv_skid_data : conv_pix_in_bram;
-wire       conv_pix_valid_skid = conv_skid_valid || (conv_pix_valid_d1 && !conv_skid_drained_flag);
+wire [7:0] conv_pix_in = skid_fifo_data[skid_rd_ptr];
+wire       conv_pix_valid_skid = !skid_empty;
 wire [7:0] conv_act_out;
 wire       conv_act_valid;
 reg        conv_act_ready;
@@ -430,13 +475,31 @@ reg              ext_wr_en_r;
 reg [31:0]       ext_wr_addr_r;
 reg signed [7:0] ext_wr_data_r;
 
+// --- 250MHz FAN-OUT PIPELINE EXTENSION (Delay = +2) ---
+(* max_fanout = 16 *) reg [31:0]       wr_addr_ab_p1, wr_addr_ab_p2;
+(* max_fanout = 16 *) reg [31:0]       wr_addr_cls_p1, wr_addr_cls_p2;
+(* max_fanout = 16 *) reg signed [7:0] wr_data_p1, wr_data_p2;
+(* max_fanout = 16 *) reg              ram_a_we_p1, ram_a_we_p2;
+(* max_fanout = 16 *) reg              ram_b_we_p1, ram_b_we_p2;
+(* max_fanout = 16 *) reg              ram_c_we_p1, ram_c_we_p2;
+(* max_fanout = 16 *) reg              cls_ram_we_p1, cls_ram_we_p2;
+(* max_fanout = 16 *) reg              ext_wr_en_p1, ext_wr_en_p2;
+(* max_fanout = 16 *) reg [31:0]       ext_wr_addr_p1, ext_wr_addr_p2;
+(* max_fanout = 16 *) reg signed [7:0] ext_wr_data_p1, ext_wr_data_p2;
+
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        ram_a_we_r   <= 0;
-        ram_b_we_r   <= 0;
-        ram_c_we_r   <= 0;
-        cls_ram_we_r <= 0;
-        ext_wr_en_r  <= 0;
+        wr_addr_ab_r <= 0; wr_addr_cls_r <= 0; wr_data_r <= 0;
+        ext_wr_addr_r <= 0; ext_wr_data_r <= 0;
+        ram_a_we_r   <= 0; ram_b_we_r   <= 0; ram_c_we_r   <= 0; cls_ram_we_r <= 0; ext_wr_en_r  <= 0;
+        
+        wr_addr_ab_p1 <= 0; wr_addr_cls_p1 <= 0; wr_data_p1 <= 0;
+        ext_wr_addr_p1 <= 0; ext_wr_data_p1 <= 0;
+        ram_a_we_p1  <= 0; ram_b_we_p1  <= 0; ram_c_we_p1  <= 0; cls_ram_we_p1 <= 0; ext_wr_en_p1 <= 0;
+        
+        wr_addr_ab_p2 <= 0; wr_addr_cls_p2 <= 0; wr_data_p2 <= 0;
+        ext_wr_addr_p2 <= 0; ext_wr_data_p2 <= 0;
+        ram_a_we_p2  <= 0; ram_b_we_p2  <= 0; ram_c_we_p2  <= 0; cls_ram_we_p2 <= 0; ext_wr_en_p2 <= 0;
     end else begin
         wr_addr_ab_r  <= wr_addr_ab_comb;
         wr_addr_cls_r <= wr_addr_cls_comb;
@@ -448,16 +511,38 @@ always @(posedge clk or negedge rst_n) begin
         ext_wr_en_r   <= ext_wr_en;
         ext_wr_addr_r <= ext_wr_addr;
         ext_wr_data_r <= ext_wr_data;
+
+        wr_addr_ab_p1  <= wr_addr_ab_r;
+        wr_addr_cls_p1 <= wr_addr_cls_r;
+        wr_data_p1     <= wr_data_r;
+        ram_a_we_p1    <= ram_a_we_r;
+        ram_b_we_p1    <= ram_b_we_r;
+        ram_c_we_p1    <= ram_c_we_r;
+        cls_ram_we_p1  <= cls_ram_we_r;
+        ext_wr_en_p1   <= ext_wr_en_r;
+        ext_wr_addr_p1 <= ext_wr_addr_r;
+        ext_wr_data_p1 <= ext_wr_data_r;
+
+        wr_addr_ab_p2  <= wr_addr_ab_p1;
+        wr_addr_cls_p2 <= wr_addr_cls_p1;
+        wr_data_p2     <= wr_data_p1;
+        ram_a_we_p2    <= ram_a_we_p1;
+        ram_b_we_p2    <= ram_b_we_p1;
+        ram_c_we_p2    <= ram_c_we_p1;
+        cls_ram_we_p2  <= cls_ram_we_p1;
+        ext_wr_en_p2   <= ext_wr_en_p1;
+        ext_wr_addr_p2 <= ext_wr_addr_p1;
+        ext_wr_data_p2 <= ext_wr_data_p1;
     end
 end
 
-// Stage 2: BRAM writes using registered values
+// Stage 2: BRAM writes using registered pipeline values
 // RAM A Write MUX
-wire final_ram_a_we = ext_wr_en_r | ram_a_we_r;
+wire final_ram_a_we = ext_wr_en_p2 | ram_a_we_p2;
 /* verilator lint_off UNUSEDSIGNAL */
-wire [31:0] final_ram_a_addr = ext_wr_en_r ? ext_wr_addr_r : wr_addr_ab_r;
+wire [31:0] final_ram_a_addr = ext_wr_en_p2 ? ext_wr_addr_p2 : wr_addr_ab_p2;
 /* verilator lint_on UNUSEDSIGNAL */
-wire signed [7:0] final_ram_a_data = ext_wr_en_r ? ext_wr_data_r : wr_data_r;
+wire signed [7:0] final_ram_a_data = ext_wr_en_p2 ? ext_wr_data_p2 : wr_data_p2;
 
 always @(posedge clk) begin
     if (final_ram_a_we)
@@ -466,20 +551,20 @@ end
 
 // RAM B Write
 always @(posedge clk) begin
-    if (ram_b_we_r)
-        ram_b[wr_addr_ab_r] <= wr_data_r;
+    if (ram_b_we_p2)
+        ram_b[wr_addr_ab_p2] <= wr_data_p2;
 end
 
 // RAM C Write
 always @(posedge clk) begin
-    if (ram_c_we_r)
-        ram_c[wr_addr_ab_r] <= wr_data_r;
+    if (ram_c_we_p2)
+        ram_c[wr_addr_ab_p2] <= wr_data_p2;
 end
 
 // CLS RAM Write (final output)
 always @(posedge clk) begin
-    if (cls_ram_we_r)
-        cls_ram[wr_addr_cls_r] <= wr_data_r;
+    if (cls_ram_we_p2)
+        cls_ram[wr_addr_cls_p2] <= wr_data_p2;
 end
 
 // ========================================================================
@@ -539,31 +624,20 @@ always @(posedge clk or negedge rst_n) begin
             end
             wr_out_ch <= stage_out_ch_cfg[active_stage];
             conv_act_ready <= 1;
-            conv_pix_valid <= 1; // FIX: Pre-assert valid to match 1-cycle BRAM latency!
+            conv_pix_valid <= 0;  // Not used for data flow anymore (FIFO driven)
             fsm_state <= S_FEED;
         end
 
         S_FEED: begin
             conv_act_ready <= 1;
 
-            if ((conv_pix_valid && !conv_pix_ready) || conv_skid_drained_flag) begin
-                // Stall: either receiver not ready, or BRAM output is stale
-                // after skid drain (1-cycle BRAM pipeline flush).
-                conv_pix_valid <= 1;
-            end else if (rd_pass < rd_total_passes) begin
-                if (0) begin end
-                if (1) begin end
-
-                conv_pix_valid <= 1;
-
+            if (skid_count < 4 && rd_pass < rd_total_passes) begin
                 if (rd_pix == rd_pix_max) begin
                     rd_pix <= 0;
                     rd_pass <= rd_pass + 1;
                 end else begin
                     rd_pix <= rd_pix + 1;
                 end
-            end else begin
-                conv_pix_valid <= 0;
             end
 
             if (conv_act_valid && conv_act_ready) begin

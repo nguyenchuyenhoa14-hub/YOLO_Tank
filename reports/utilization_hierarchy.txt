@@ -1,0 +1,41 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2024 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2024.2 (win64) Build 5239630 Fri Nov 08 22:35:27 MST 2024
+| Date         : Thu Mar 26 22:58:18 2026
+| Host         : DESKTOP-9B72JVV running 64-bit major release  (build 9200)
+| Command      : report_utilization -hierarchical -file C:/github/reports/utilization_hierarchy.txt
+| Design       : yolov8_top_core
+| Device       : xc7z020clg400-1
+| Speed File   : -1
+| Design State : Routed
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Utilization Design Information
+
+Table of Contents
+-----------------
+1. Utilization by Hierarchy
+
+1. Utilization by Hierarchy
+---------------------------
+
++---------------------+--------------------+------------+------------+---------+------+-------+--------+--------+------------+
+|       Instance      |       Module       | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
++---------------------+--------------------+------------+------------+---------+------+-------+--------+--------+------------+
+| yolov8_top_core     |              (top) |      24173 |      24158 |      14 |    1 | 25748 |    124 |      2 |         10 |
+|   (yolov8_top_core) |              (top) |        283 |        283 |       0 |    0 |   322 |      0 |      0 |          0 |
+|   u_detect_head     |    detect_head_seq |      19320 |      19313 |       6 |    1 | 19451 |    124 |      2 |          6 |
+|     (u_detect_head) |    detect_head_seq |        369 |        369 |       0 |    0 |  1189 |     96 |      1 |          2 |
+|     shared_conv     |         conv_stage |      18952 |      18945 |       6 |    1 | 18262 |     28 |      1 |          4 |
+|       (shared_conv) |         conv_stage |       1305 |       1298 |       6 |    1 |  2623 |     28 |      1 |          4 |
+|       engine        | cnn_engine_dynamic |      17650 |      17650 |       0 |    0 | 15639 |      0 |      0 |          0 |
+|         (engine)    | cnn_engine_dynamic |       5009 |       5009 |       0 |    0 | 14748 |      0 |      0 |          0 |
+|         lb_inst     |        line_buffer |      12644 |      12644 |       0 |    0 |   891 |      0 |      0 |          0 |
+|   u_dfl             |    dfl_accelerator |        539 |        531 |       8 |    0 |   583 |      0 |      0 |          0 |
+|     (u_dfl)         |    dfl_accelerator |        471 |        463 |       8 |    0 |   499 |      0 |      0 |          0 |
+|     u_sdiv          |        seq_divider |         68 |         68 |       0 |    0 |    84 |      0 |      0 |          0 |
+|   u_nms             |       iou_nms_unit |       4031 |       4031 |       0 |    0 |  5392 |      0 |      0 |          4 |
++---------------------+--------------------+------------+------------+---------+------+-------+--------+--------+------------+
+* Note: The sum of lower-level cells may be larger than their parent cells total, due to cross-hierarchy LUT combining
+
+

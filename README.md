@@ -2,8 +2,6 @@
 
 **A Resource-Efficient FPGA Accelerator for YOLOv8 Detection Head with On-Chip DFL Decoding and Division-Free NMS**
 
-> Submitted to *International Conference on Intelligent Autonomous Agents and Applications (IAAA 2026)*
-
 ---
 
 ## 📸 Demo — Verilator Simulation Detection Result
@@ -18,29 +16,31 @@
 
 ## 🏗️ Architecture Overview
 
-```
-ARM Cortex-A9 (PS)                    Programmable Logic (PL)
-┌──────────────┐    AXI4 burst    ┌─────────────────────────────────────┐
-│  DDR Memory  │ ───────────────► │  Master FSM (6-Stage Sequential)    │
-│  (Backbone   │                  │      ┌──────────┐  ┌──────────┐    │
-│   + Neck     │                  │      │  RAM A   │  │  RAM B   │    │
-│   output)    │                  │      └────┬─────┘  └─────┬────┘    │
-│              │                  │           │  ping-pong    │         │
-│              │                  │      ┌────┴──────────────┴────┐    │
-│              │                  │      │   CNN Engine (16× MACs) │    │
-│              │                  │      │   512-bit parallel bus  │    │
-│              │                  │      └────────────┬───────────┘    │
-│              │                  │                   │                 │
-│              │                  │      ┌────────────▼───────────┐    │
-│              │                  │      │    DFL Accelerator     │    │
-│              │                  │      │  (256-entry LUT Softmax)│    │
-│              │                  │      └────────────┬───────────┘    │
-│              │                  │                   │                 │
-│              │  ◄─── Results ── │      ┌────────────▼───────────┐    │
-│              │                  │      │   Division-Free NMS    │    │
-│              │                  │      │  (5+4 stage pipeline)  │    │
-└──────────────┘                  │      └────────────────────────┘    │
-                                  └─────────────────────────────────────┘
+```text
+       ARM Cortex-A9 (PS)                             Programmable Logic (PL)
+┌──────────────────────────────┐          ┌──────────────────────────────────────────────────┐
+│                              │          │          Global Finite State Machine             │
+│        DDR Memory            │          │             (Sequential 6-Stage)                 │
+│                              │          │                                                  │
+│   ┌──────────────────────┐   │          │  ┌─────────┐   ┌─────────┐   ┌─────────┐         │
+│   │ YOLOv8 Backbone +    │   │ AXI4     │  │  RAM A  │   │  RAM B  │   │  RAM C  │         │
+│   │ Neck Feature Maps    │ ──┼──────────┼─►│ (Input) │◄─►│ (Multi) │◄─►│ (cv2)   │         │
+│   └──────────────────────┘   │ Burst    │  └────┬────┘   └────┬────┘   └────┬────┘         │
+│                              │          │       │             │             │              │
+│                              │          │  ┌────▼─────────────▼─────────────▼────┐         │
+│                              │          │  │       Resource-Multiplexed CNN      │         │
+│                              │          │  │ 16x MAC Array (6 DSPs) + Q-Pipeline │         │
+│                              │          │  └──────────────────┬──────────────────┘         │
+│                              │          │                     │                            │
+│                              │          │  ┌──────────────────▼──────────────────┐         │
+│                              │          │  │       Zero-DSP DFL Accelerator      │         │
+│                              │          │  │         256-entry BRAM LUT          │         │
+│                              │          │  └──────────────────┬──────────────────┘         │
+│                              │          │                     │                            │
+│   ┌──────────────────────┐   │          │  ┌──────────────────▼──────────────────┐         │
+│   │ Valid Detections     │◄──┼──────────┼──│         Division-Free NMS           │         │
+│   └──────────────────────┘   │ AXI4     │  │         Cross-Multiply (4 DSPs)     │         │
+└──────────────────────────────┘          └──────────────────────────────────────────────────┘
 ```
 
 ---
@@ -49,10 +49,10 @@ ARM Cortex-A9 (PS)                    Programmable Logic (PL)
 
 | Innovation | Description |
 |:-----------|:------------|
-| **Resource-multiplexed Conv** | Single configurable convolution engine reused across all 6 head layers via time-division multiplexing with ping-pong BRAM buffering |
-| **Hardware DFL Decoder** | 256-entry BRAM LUT replaces floating-point Softmax; sequential integer divider produces Q0.16 probabilities |
-| **Division-Free IoU NMS** | Cross-multiplication `inter × D > union × N` eliminates hardware dividers; 5-stage load + 4-stage IoU pipeline at 100 MHz |
-| **Three-Phase Quantization** | ReLU Knowledge Distillation → PCQ-Aware Fine-Tuning → INT8 Static Export |
+| **Resource-Multiplexed CNN** | Single configurable MAC engine reused across all 6 head layers via time-division multiplexing with ping-pong buffering. |
+| **Zero-DSP DFL Decoder** | 256-entry BRAM LUT replaces floating-point Softmax, eliminating exponential math and extracting coordinates with 0 DSPs. |
+| **Division-Free IoU NMS** | Cross-multiplication `inter × D > union × N` eliminates hardware dividers, filtering spatial candidates with only 4 DSPs. |
+| **Quantization Pipeline** | Activation scaling factors fused directly into hardware, achieving INT8 inference without runtime floating-point overhead. |
 
 ---
 
@@ -60,26 +60,28 @@ ARM Cortex-A9 (PS)                    Programmable Logic (PL)
 
 | Metric | Value |
 |:-------|:------|
-| Detection Head Throughput | **31.0 FPS** @ 100 MHz |
-| LUT Usage | 15,401 / 53,200 (28.95%) |
-| FF Usage | 22,660 / 106,400 (21.30%) |
-| BRAM Usage | 126 / 140 (90.00%) |
-| DSP48 Usage | 154 / 220 (70.00%) |
-| PL Dynamic Power | 0.279 W |
+| Throughput | **32.1 FPS** @ 105 MHz |
+| Power Efficiency | **106.3 FPS/W** |
+| Post-Processing Latency | **1.84 ms** |
+| LUT Usage | 24,115 / 53,200 (45.3%) |
+| FF Usage | 11,048 / 106,400 (10.4%) |
+| BRAM Usage | 125 / 140 (89.3%) |
+| DSP48 Usage | **10** / 220 (4.55%) |
+| PL Dynamic Power | 0.302 W |
 | mAP₅₀ (INT8, KIIT-MiTA) | 67.0% |
-| WNS (post P&R) | +0.122 ns |
+| WNS (Timing) | +0.074 ns |
 
 ---
 
 ## 📁 Repository Structure
 
-```
+```text
 YOLO_Tank/
 │
 ├── README.md
 │
 ├── source/                          # RTL source — Detection Head
-│   ├── detect_head_seq.v            #   Sequential 6-layer FSM controller
+│   ├── detect_head_seq.v            #   Sequential 6-layer global controller
 │   ├── conv_stage.v                 #   Configurable convolution stage
 │   ├── cnn_engine_dynamic.v         #   16-PE MAC array engine
 │   ├── line_buffer.v                #   BRAM-based 3×3 sliding window
@@ -89,41 +91,25 @@ YOLO_Tank/
 │   ├── yolov8_top_core.v            #   Top-level detection head core
 │   ├── yolov8_axi_wrapper_full.v    #   AXI4 bus wrapper
 │   ├── ooc_timing.xdc               #   Out-of-context timing constraints
-│   ├── ooc_timing_axi.xdc           #   AXI timing constraints
 │   └── yolov8_system.xdc            #   Full system constraints
 │
+├── IAAA head/                       # Manuscript
+│   └── manuscript.pdf               #   Final Submission Manuscript (PDF only)
+│
 ├── testbench/                       # Verilator & Verilog testbenches
-│   ├── tb_p3_seq.v                  #   P3 scale detection head test
-│   ├── tb_p3_system.v               #   P3 system-level test
-│   ├── tb_iou_nms.v                 #   IoU NMS unit test
-│   ├── tb_centroid_nms.v            #   Centroid NMS test
-│   ├── tb_full_pipeline.v           #   Full pipeline integration test
-│   ├── tb_axi_wrapper.cpp           #   Verilator AXI wrapper test
-│   ├── tb_yolov8_top_core.cpp       #   Verilator top core test
 │   └── tb_cycle_measure.cpp         #   Cycle-accurate timing measurement
 │
 ├── weights_and_mem/                 # INT8 quantized weights & LUT data
-│   ├── weights_for_verilog_pe/      #   Per-layer weight .mem files
-│   │   ├── model_22_cv2_*           #     BBox branch (3 layers × 6 params)
-│   │   └── model_22_cv3_*           #     Class branch (3 layers × 6 params)
 │   ├── exp_lut_p3.mem               #   DFL exponential lookup table
-│   ├── tank_centers.mem             #   NMS detection output
-│   └── tank_centers_iou.mem         #   NMS IoU debug output
+│   └── tank_centers.mem             #   NMS detection output
 │
 ├── python_utils/                    # Python verification & visualization
-│   ├── golden_all_layers.py         #   Golden model for all 6 head layers
-│   ├── check_rtl_vs_python_accuracy.py  # RTL vs golden comparison
-│   ├── visualize_hardware_nms.py    #   NMS result visualization
-│   ├── regenerate_all.py            #   Regenerate all .mem from model
-│   └── regenerate_all_kiit.py       #   Regenerate for KIIT-MiTA dataset
+│   └── check_rtl_vs_python_accuracy.py  # RTL vs golden comparison
 │
 ├── scripts/                         # Simulation shell scripts
-│   ├── run_all_verilator.sh         #   Run all Verilator simulations
-│   └── run_cycle_measure.sh         #   Measure pipeline cycle count
+│   └── run_all_verilator.sh         #   Run all Verilator simulations
 │
 └── demo/                            # Demo images & detection results
-    ├── image_s3r2_kiit_402.jpeg     #   Input test image (320×320)
-    └── detection_result.jpg         #   Hardware detection output
 ```
 
 ---
@@ -186,9 +172,3 @@ Trained and evaluated on the [KIIT-MiTA Military Vehicle Dataset](https://doi.or
 ## 📄 License
 
 This project is released for **academic research purposes only**.
-
----
-
-<p align="center">
-  <b>YOLO-Tank</b> — Bringing real-time object detection to the edge with FPGA 🛡️
-</p>

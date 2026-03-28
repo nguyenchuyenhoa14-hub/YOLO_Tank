@@ -1,0 +1,14 @@
+IAAA head/*.tex
+IAAA head/*.aux
+IAAA head/*.bbl
+IAAA head/*.blg
+IAAA head/*.log
+IAAA head/*.fdb_latexmk
+IAAA head/references.bib
+IAAA head/reference/
+IAAA head/*.bst
+IAAA head/*.cls
+IAAA head/extracted*
+IAAA head/nguyen*
+IAAA head/paper*
+IAAA head/email*

@@ -414,17 +414,18 @@ always @(posedge clk or negedge rst_n) begin
         ST_LOAD_CORR_A: begin
             // Pixel conversion (shift only — very fast)
             if (!is_p4_r && !is_p5_r) begin
-                s5a_l_pix <= (adj_l_r + 256) >> 9;
-                s5a_t_pix <= (tmp_t_r + 256) >> 9;
-                s5a_r_pix <= (adj_r_r + 256) >> 9;
-                s5a_b_pix <= (tmp_b_r + 256) >> 9;
+                // Scale bbox dimensions down by 0.8125 (multiply by 13, shift by 13 instead of 9)
+                s5a_l_pix <= ((adj_l_r * 13) + 4096) >> 13;
+                s5a_t_pix <= ((tmp_t_r * 13) + 4096) >> 13;
+                s5a_r_pix <= ((adj_r_r * 13) + 4096) >> 13;
+                s5a_b_pix <= ((tmp_b_r * 13) + 4096) >> 13;
                 s5a_anchor_x <= $signed({10'b0, cx_g_r}) * P3_STRIDE + (P3_STRIDE >> 1);
                 s5a_anchor_y <= $signed({10'b0, cy_g_r}) * P3_STRIDE + (P3_STRIDE >> 1);
             end else if (is_p4_r && !is_p5_r) begin
-                s5a_l_pix <= adj_l_r >> 8;
-                s5a_t_pix <= tmp_t_r >> 8;
-                s5a_r_pix <= adj_r_r >> 8;
-                s5a_b_pix <= tmp_b_r >> 8;
+                s5a_l_pix <= ((adj_l_r * 13) + 2048) >> 12;
+                s5a_t_pix <= ((tmp_t_r * 13) + 2048) >> 12;
+                s5a_r_pix <= ((adj_r_r * 13) + 2048) >> 12;
+                s5a_b_pix <= ((tmp_b_r * 13) + 2048) >> 12;
                 s5a_anchor_x <= $signed({9'b0, cx_g_r}) * P4_STRIDE + (P4_STRIDE >> 1);
                 s5a_anchor_y <= $signed({9'b0, cy_g_r}) * P4_STRIDE + (P4_STRIDE >> 1);
             end else begin
