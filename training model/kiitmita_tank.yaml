@@ -1,0 +1,7 @@
+path: v:/SRNet/datasets/KIIT-MiTA-Tank
+train: train/images
+val: valid/images
+
+nc: 1
+names:
+  0: Tank
