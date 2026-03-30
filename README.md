@@ -7,7 +7,7 @@
 ## 📸 Demo — Verilator Simulation Detection Result
 
 <p align="center">
-  <img src="demo/detection_results.jpg" width="600"/>
+  <img src="https://raw.githubusercontent.com/nguyenchuyenhoa14-hub/YOLO_Tank/main/demo/detection_results.jpg" width="600"/>
 </p>
 
 <p align="center"><i>Detection results from RTL simulation via Verilator (KIIT-MiTA dataset, 320×320 input)</i></p>
